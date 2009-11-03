@@ -467,10 +467,13 @@ static herr_t CopyObject (hid_t from,
       }
     }
 
-    if (do_copy)
-      printf ("   copying dataset '%s%s'\n", pathname, objectname);
-    else
-      printf ("   creating dataset '%s%s'\n", pathname, objectname);
+    if (verbose)
+    {
+      if (do_copy)
+        printf ("   copying dataset '%s%s'\n", pathname, objectname);
+      else
+        printf ("   creating dataset '%s%s'\n", pathname, objectname);
+    }
 
     /* first pass: create datasets */
     if (do_create) 
