@@ -435,13 +435,13 @@ static herr_t CopyObject (hid_t from,
 
           assert(snprintf(timestep, sizeof(timestep)/sizeof(timestep[0]), "it%09d", iter) < (int)(sizeof(timestep)/sizeof(timestep[0])));
           if (!do_create || CheckIfExists(to, timestep))
-            CHECK_ERROR (to = H5Gopen (to, timestep));
+            CHECK_ERROR (tsgroup = H5Gopen (to, timestep));
           else
-            CHECK_ERROR (to = H5Gcreate (to, timestep, 0));
+            CHECK_ERROR (tsgroup = H5Gcreate (to, timestep, 0));
           
           cached_iter=iter;
-          tsgroup = to;
         }
+        to = tsgroup;
       }
     }
 
