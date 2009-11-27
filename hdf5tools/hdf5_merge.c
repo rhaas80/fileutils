@@ -71,6 +71,7 @@ static int do_create, do_copy;     /* for two-pass runs, what to do in this pass
 static int verbose = 0;            /* output dataset names as we go */
 static int create_groups = 0;      /* create one group per iteration */
 static int two_passes = 0;         /* first create all groups and datasets, then fill them with data */
+static int change_nioprocs = 0;    /* set Cactus' nioprocs */
 static time_t program_startup;     /* used to determine if a dataset has been created by us */
 
 
@@ -137,6 +138,9 @@ int main (int argc, char *argv[])
         break;
       case 't':
         two_passes = 1;
+        break;
+      case 'u':
+         change_nioprocs = 1;
         break;
       default:
         fprintf(stderr, "unknown option '%s'.", argv[i]);
@@ -267,6 +271,7 @@ void usage(char *argv[])
 {
     fprintf (stderr, "Usage: %s [-g] [-t] [-v] <infile1> [<infile2> ...] <outfile>\n",argv[0]);
     fprintf (stderr, "       -g : create groups for each iteration\n");
+    fprintf (stderr, "       -u : set niprocs=1 (unchunk)\n");
     fprintf (stderr, "       -t : copy datasets in two passes\n");
     fprintf (stderr, "       -v : output each dataset name as it is copied\n");
     fprintf (stderr, "       Cactus' hdf5_merge uses -c -v by default\n");
@@ -581,6 +586,12 @@ static herr_t CopyAttribute (hid_t from,
     value = malloc (attrsize);
     CHECK_ERROR (H5Aread (attr, datatype, value));
     CHECK_ERROR (H5Aclose (attr));
+    if (change_nioprocs &&
+        strcmp(attrname, "nioprocs") == 0 &&
+        strcmp(pathname, "/Parameters and Global Attributes/") == 0)
+    {
+        *((int*)value) = 1;
+    }
     CHECK_ERROR (attr = H5Acreate (to, attrname, datatype, dataspace,
                                    H5P_DEFAULT));
     CHECK_ERROR (H5Awrite (attr, datatype, value));
