@@ -274,7 +274,7 @@ void usage(char *argv[])
     fprintf (stderr, "       -u : set niprocs=1 (unchunk)\n");
     fprintf (stderr, "       -t : copy datasets in two passes\n");
     fprintf (stderr, "       -v : output each dataset name as it is copied\n");
-    fprintf (stderr, "       Cactus' hdf5_merge uses -c -v by default\n");
+    fprintf (stderr, "       Cactus' hdf5_merge uses -v by default\n");
     fprintf (stderr, "   eg, %s -g -t alp.time*.h5 alp.h5"
                      "\n\n", argv[0]);
 }
