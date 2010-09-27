@@ -18,6 +18,7 @@
 #define H5_USE_16_API 1
 
 #include <hdf5.h>
+#include <search.h>
 
 #if (H5_VERS_MAJOR == 1 && (H5_VERS_MINOR == 8) && (H5_VERS_RELEASE == 0))
 #warning "Hacking HDF5 1.8.0 compatiblity with 1.6.x; fix once 1.8.0 stable"
@@ -65,6 +66,7 @@
          since they are accessed from recursively or
          indirectly called routines which only get passed
          a single user-supplied argument */
+static char *current_file  = NULL; /* name of the current input file */
 static char *pathname = NULL;      /* pathname of the current object */
 static unsigned int nerrors = 0;   /* global error counter */
 static int do_create, do_copy;     /* for two-pass runs, what to do in this pass */
@@ -74,6 +76,12 @@ static int two_passes = 0;         /* first create all groups and datasets, then
 static int change_nioprocs = 0;    /* set Cactus' nioprocs */
 static time_t program_startup;     /* used to determine if a dataset has been created by us */
 
+struct treenode
+{
+  int iteration;
+  const char *source_file;
+};
+static void *iterations_seen = NULL;
 
 /*****************************************************************************/
 /*                           local function prototypes                       */
@@ -82,6 +90,84 @@ static herr_t CopyObject (hid_t copy_from, const char *objectname, void *arg);
 static herr_t CopyAttribute (hid_t src, const char *attr_name, void *arg);
 static int CheckIfExists(hid_t from, const char *objectname);
 static void usage(char *argv[]);
+static struct treenode *find_iteration(int iteration);
+static struct treenode *add_iteration(int iteration, const char *filename);
+static int compare(const void *a, const void *b);
+static int files_from_same_set(const char *a, const char *b);
+
+static int compare(const void *a, const void *b)
+{
+  struct treenode *n, *m;
+
+  n = (struct treenode *)a;
+  m = (struct treenode *)b;
+
+  return n->iteration - m->iteration;
+}
+
+static struct treenode *find_iteration(int iteration)
+{
+  struct treenode n = {iteration, NULL};
+  struct treenode **m;
+
+  /* tfind and tsearch return a pointer to a structure whose first element is a
+   * pointer to the payload */
+  m = tfind(&n, &iterations_seen, compare);
+
+  return m ? *m : NULL;
+}
+
+static struct treenode *add_iteration(int iteration, const char *fn)
+{
+  struct treenode *n;
+
+  n = find_iteration(iteration);
+  if(NULL == n)
+  {
+    n = malloc(sizeof(*n));
+    assert(n != NULL);
+
+    n->iteration = iteration;
+    n->source_file = fn;
+
+    tsearch(n, &iterations_seen, compare);
+  }
+
+  return n;
+}
+
+/* checks if files *a and *b are from the same set of output files */
+static int files_from_same_set(const char *a, const char *b)
+{
+  const char *ext_a, *ext_b;
+
+  ext_a = strstr(a, ".file_");
+  ext_b = strstr(b, ".file_");
+
+  if(ext_a && ext_b)
+  {
+    /* both are chunked, the part before and after file_ must agree */
+    if(strncmp(a, b, ext_a-a+1) != 0)
+      return 0;
+    /* skip beyond .file_[0-9]*. */
+    ext_a = strchr(ext_a+1, '.');
+    ext_b = strchr(ext_b+1, '.');
+    if(!ext_a || !ext_b)
+      return 0;
+    /* compare remainder */
+    return strcmp(ext_a, ext_b) == 0;
+  }
+  else if(!ext_a && !ext_b)
+  {
+    /* both are unchunked so they must have the very same name */
+    return strcmp(a, b) == 0;
+  }
+  else
+  {
+    /* one file is chunked the other unchunked, so they can never be from the same set */
+    return 0;
+  }
+}
 
 
  /*@@
@@ -216,8 +302,9 @@ int main (int argc, char *argv[])
         printf ("\n  Merging objects from input file '%s' into output file '%s'\n",
                 argv[i + 1], argv[argc-1]);
       }
-      pathname = "/";
-      CHECK_ERROR (infiles[i] = H5Fopen (argv[i + 1], H5F_ACC_RDONLY, H5P_DEFAULT));
+      pathname = (char *)"/";
+      current_file = argv[i + 1];
+      CHECK_ERROR (infiles[i] = H5Fopen (current_file, H5F_ACC_RDONLY, H5P_DEFAULT));
       CHECK_ERROR (H5Giterate (infiles[i], "/", NULL, CopyObject, &outfile));
       /* finally, close the open file */
       CHECK_ERROR (H5Fclose (infiles[i]));
@@ -404,32 +491,40 @@ static herr_t CopyObject (hid_t from,
 
     /* create a group for the timestep if it does not yet exist */
     char timestep[128]; /* uses to hold the string it123456789 */
+    struct treenode *n;
     char *p;
-    int i, iter;
+    int iter;
     static hid_t tsgroup = -1;
     static int cached_iter = -1;
     
-    CHECK_ERROR (from = H5Dopen (from, objectname));
-    CHECK_ERROR (datatype = H5Dget_type (from));
-    CHECK_ERROR (dataspace = H5Dget_space (from));
-
-    /* put each iteration in a separate group if so requested */
-    if (create_groups)
+    p=strstr(objectname, "it=");
+    if(NULL != p)
     {
-      /* NB: this can and has to be called during both passes to get the correct
-     * to handle */
-      p=strstr(objectname, "it=");
-      if (p != NULL)
-      {
-        p+=3; // skip it=
-        i=0;
-        while (*p != ' ') {
-          timestep[i++] = *(p++);
-          assert(i<(int)(sizeof(timestep)/sizeof(timestep[0])));
-        }
-        timestep[i] = '\0';
+      /* mark where we first saw this iteration and only accept further datasets
+       * for it from there */
+      iter = atoi(p+3); // skip 'it=', atoi stops at non-digit characters
+      n = add_iteration(iter, current_file);
+    }
+    else
+    {
+      iter = -1;
+      n = NULL;
+    }
 
-        iter = atoi(timestep);
+    /* copy dataset only if it is from the correct file or if it does not carry
+     * an iteration tag (which likely makes it metadata) */
+    /* this assumes that pointers to file names are unique and persistent */
+    if (iter == -1 || files_from_same_set(n->source_file, current_file)) 
+    {
+      CHECK_ERROR (from = H5Dopen (from, objectname));
+      CHECK_ERROR (datatype = H5Dget_type (from));
+      CHECK_ERROR (dataspace = H5Dget_space (from));
+
+      /* put each iteration in a separate group if so requested */
+      if (iter != -1 && create_groups)
+      {
+        /* NB: this can and has to be called during both passes to get the correct
+         * to handle */
         if (iter != cached_iter)
         {
           if (tsgroup != -1)
@@ -448,73 +543,73 @@ static herr_t CopyObject (hid_t from,
         }
         to = tsgroup;
       }
-    }
 
-    /* check if object already exists (and was not created by us) */
-    if (do_create && CheckIfExists(to, objectname))
-    {
+      /* check if object already exists (and was not created by us) */
+      if (do_create && CheckIfExists(to, objectname))
+      {
+        if (verbose)
+        {
+          printf ("   object '%s%s' will not be copied (already exists)\n",
+                   pathname, objectname);
+        }
+        return (0);
+      } 
+      else if (do_copy && !do_create)
+      {
+        /* we only get here during pass two of two-pass runs */
+        CHECK_ERROR (H5Gget_objinfo (to, objectname, 0, &objectinfo));
+        if (objectinfo.mtime < program_startup)
+        {
+            /* object was not created by us, so we don't modify it (see first
+             * pass testabove) */
+            return (0);
+        }
+      }
+
       if (verbose)
       {
-        printf ("   object '%s%s' will not be copied (already exists)\n",
-                 pathname, objectname);
+        if (do_copy)
+          printf ("   copying dataset '%s%s'\n", pathname, objectname);
+        else
+          printf ("   creating dataset '%s%s'\n", pathname, objectname);
       }
-      return (0);
-    } 
-    else if (do_copy && !do_create)
-    {
-      /* we only get here during pass two of two-pass runs */
-      CHECK_ERROR (H5Gget_objinfo (to, objectname, 0, &objectinfo));
-      if (objectinfo.mtime < program_startup)
-      {
-          /* object was not created by us, so we don't modify it (see first
-           * pass testabove) */
-          return (0);
-      }
-    }
 
-    if (verbose)
-    {
-      if (do_copy)
-        printf ("   copying dataset '%s%s'\n", pathname, objectname);
+      /* first pass: create datasets */
+      if (do_create) 
+      {
+        CHECK_ERROR (to = H5Dcreate (to, objectname, datatype, dataspace,
+                    H5P_DEFAULT));
+        CHECK_ERROR (H5Aiterate (from, NULL, CopyAttribute, &to));
+      }
       else
-        printf ("   creating dataset '%s%s'\n", pathname, objectname);
-    }
-
-    /* first pass: create datasets */
-    if (do_create) 
-    {
-      CHECK_ERROR (to = H5Dcreate (to, objectname, datatype, dataspace,
-                  H5P_DEFAULT));
-      CHECK_ERROR (H5Aiterate (from, NULL, CopyAttribute, &to));
-    }
-    else
-    {
-      CHECK_ERROR (to = H5Dopen (to, objectname));
-    }
-
-    /* second pass: fill with data */
-    if (do_copy)
-    {
-      objectsize = H5Sget_select_npoints (dataspace) * H5Tget_size (datatype);
-      if (objectsize > 0)
       {
-        data = malloc (objectsize);
-        if (data == NULL)
-        {
-          fprintf (stderr, "failled to allocate %d bytes of memory, giving up\n",
-                   (int) objectsize);
-          exit (-1);
-        }
-        CHECK_ERROR (H5Dread (from, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT,
-                              data));
-        CHECK_ERROR (H5Dwrite (to, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT,data));
-        free (data);
+        CHECK_ERROR (to = H5Dopen (to, objectname));
       }
+
+      /* second pass: fill with data */
+      if (do_copy)
+      {
+        objectsize = H5Sget_select_npoints (dataspace) * H5Tget_size (datatype);
+        if (objectsize > 0)
+        {
+          data = malloc (objectsize);
+          if (data == NULL)
+          {
+            fprintf (stderr, "failled to allocate %d bytes of memory, giving up\n",
+                     (int) objectsize);
+            exit (-1);
+          }
+          CHECK_ERROR (H5Dread (from, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT,
+                                data));
+          CHECK_ERROR (H5Dwrite (to, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT,data));
+          free (data);
+        }
+      }
+      CHECK_ERROR (H5Dclose (to));
+      CHECK_ERROR (H5Dclose (from));
+      CHECK_ERROR (H5Sclose (dataspace));
+      CHECK_ERROR (H5Tclose (datatype));
     }
-    CHECK_ERROR (H5Dclose (to));
-    CHECK_ERROR (H5Dclose (from));
-    CHECK_ERROR (H5Sclose (dataspace));
-    CHECK_ERROR (H5Tclose (datatype));
   }
   else
   {
