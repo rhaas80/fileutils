@@ -177,6 +177,8 @@ void usage(char *argv[])
     fprintf (stderr, "       -h : this message\n");
     fprintf (stderr, "       -v : output each file name as it is processed,\n"
                      "            twice outputs datasets as well\n");
+    fprintf (stderr, "       -h : this message\n");
+    fprintf (stderr, "       basename can contain %d for the iteration number\n");
 }
 
  /*@@
