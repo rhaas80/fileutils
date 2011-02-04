@@ -178,7 +178,7 @@ void usage(char *argv[])
     fprintf (stderr, "       -v : output each file name as it is processed,\n"
                      "            twice outputs datasets as well\n");
     fprintf (stderr, "       -h : this message\n");
-    fprintf (stderr, "       basename can contain %d for the iteration number\n");
+    fprintf (stderr, "       basename can contain %%d for the iteration number\n");
 }
 
  /*@@
@@ -225,7 +225,6 @@ static herr_t CopyObject (hid_t group,
   char buf[1024];
   size_t len_written;
   const char *basename = calldata->basename;
-  const char *infile = calldata->infile;
 
   // we are interested only in datasets
   CHECK_ERROR (H5Gget_objinfo (group, objectname, 0, &object_info));
