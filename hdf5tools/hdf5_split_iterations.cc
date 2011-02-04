@@ -48,7 +48,7 @@ static int verbose;
 /*****************************************************************************/
 /*                           local function prototypes                       */
 /*****************************************************************************/
-static herr_t LinkObject (hid_t copy_from, const char *objectname, void *arg);
+static herr_t CopyObject (hid_t copy_from, const char *objectname, void *arg);
 static void usage(char *argv[]);
 
  /*@@
@@ -59,7 +59,7 @@ static void usage(char *argv[]);
                Main routine of the HDF5 file splitter
    @enddesc
 
-   @calls      LinkObject
+   @calls      CopyObject
 
    @var        argc
    @vdesc      number of command line arguments
@@ -135,7 +135,7 @@ int main(int argc, char **argv)
         fprintf (stdout, "processing file '%s'\n", fn);
       calldata.basename = basename;
       calldata.infile = fn;
-      CHECK_ERROR (H5Giterate (infile, "/", NULL, LinkObject, &calldata));
+      CHECK_ERROR (H5Giterate (infile, "/", NULL, CopyObject, &calldata));
     }
     else
     {
@@ -182,7 +182,7 @@ void usage(char *argv[])
 }
 
  /*@@
-   @routine    LinkObject
+   @routine    CopyObject
    @date       Sat 27 Mar 2010
    @author     Roland Haas
    @desc
@@ -213,7 +213,7 @@ void usage(char *argv[])
                1 - short-curcuit, no further iteration of this group
    @endreturndesc
 @@*/
-static herr_t LinkObject (hid_t group,
+static herr_t CopyObject (hid_t group,
                           const char *objectname,
                           void * calldata_arg)
 {
@@ -251,10 +251,7 @@ static herr_t LinkObject (hid_t group,
       
       CHECK_ERROR (outfile = H5Fcreate (buf, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT));
 
-      // link in parameters group
-      //CHECK_ERROR (H5Lcreate_external(infile, "/" GLOBAL_PARAMETERS_AND_ATTRIBUTES_GROUP, 
-      //                                outfile, GLOBAL_PARAMETERS_AND_ATTRIBUTES_GROUP, 
-      //                                H5P_DEFAULT, H5P_DEFAULT));
+      // copy in parameters group
       CHECK_ERROR (H5Ocopy(group, GLOBAL_PARAMETERS_AND_ATTRIBUTES_GROUP, 
                            outfile, GLOBAL_PARAMETERS_AND_ATTRIBUTES_GROUP, 
                            H5P_DEFAULT, H5P_DEFAULT));
@@ -269,8 +266,6 @@ static herr_t LinkObject (hid_t group,
     // link object into proper file
     len_written = snprintf(buf, sizeof(buf), "/%s", objectname);
     assert(len_written < sizeof(buf));
-    //CHECK_ERROR (H5Lcreate_external(infile, buf, outfile, objectname,
-    //                                H5P_DEFAULT, H5P_DEFAULT));
     CHECK_ERROR (H5Ocopy(group, objectname, outfile, objectname,
                          H5P_DEFAULT, H5P_DEFAULT));
   } // is dataset
