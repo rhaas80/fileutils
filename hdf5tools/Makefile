@@ -7,7 +7,7 @@ all: hdf5_merge hdf5_split_iterations
 	echo "All done"
 
 hdf5_merge: hdf5_merge.c
-	gcc -O3 $(CFLAGS) -L${HDF5_DIR}/lib -I${HDF5_DIR}/include -lhdf5 -o hdf5_merge hdf5_merge.c
+	gcc -O3 $(CFLAGS) -L${HDF5_DIR}/lib -I${HDF5_DIR}/include -o hdf5_merge hdf5_merge.c -lm -lz -lhdf5
 
 hdf5_split_iterations: hdf5_split_iterations.cc
-	g++ -O3 $(CXXFLAGS) -L${HDF5_DIR}/lib -I${HDF5_DIR}/include -lhdf5 -o hdf5_split_iterations hdf5_split_iterations.cc
+	g++ -O3 $(CXXFLAGS) -L${HDF5_DIR}/lib -I${HDF5_DIR}/include -o hdf5_split_iterations hdf5_split_iterations.cc -lm -lz -lhdf5
