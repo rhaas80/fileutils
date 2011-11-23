@@ -209,7 +209,7 @@ static int files_from_same_set(const char *a, const char *b)
 int main (int argc, char *argv[])
 {
   int i, pass;
-  hid_t *infiles, outfile;
+  hid_t *infiles, outfile, fapl_id;
 
   /* used to track which objects are created by me */
   program_startup = time(NULL);
@@ -259,13 +259,16 @@ int main (int argc, char *argv[])
     return (0);
   }
 
+  /* use buffered stdio rather than unbuffered read(2) calls */
+  CHECK_ERROR (fapl_id = H5Pcreate(H5P_FILE_ACCESS));
+  CHECK_ERROR (H5Pset_fapl_stdio(fapl_id));
   H5E_BEGIN_TRY
   {
     /* open the input files */
     infiles = (hid_t *) malloc ((argc - 2) * sizeof (hid_t));
     for (i = 0; i < argc - 2; i++)
     {
-      infiles[i] = H5Fopen (argv[i + 1], H5F_ACC_RDONLY, H5P_DEFAULT);
+      infiles[i] = H5Fopen (argv[i + 1], H5F_ACC_RDONLY, fapl_id);
       if (infiles[i] < 0)
       {
         fprintf (stderr, "ERROR: Cannot open HDF5 input file '%s' !\n\n",
@@ -277,11 +280,11 @@ int main (int argc, char *argv[])
 
     /* try to open an existing outfile file in append mode,
        if this fails create it as a new file */
-    outfile = H5Fopen (argv[argc-1], H5F_ACC_RDWR, H5P_DEFAULT);
+    outfile = H5Fopen (argv[argc-1], H5F_ACC_RDWR, fapl_id);
     if (outfile < 0)
     {
       outfile = H5Fcreate (argv[argc-1], H5F_ACC_TRUNC, H5P_DEFAULT,
-                           H5P_DEFAULT);
+                           fapl_id);
     }
     if (outfile < 0)
     {
@@ -326,6 +329,7 @@ int main (int argc, char *argv[])
 
   CHECK_ERROR (H5Fclose (outfile));
   free (infiles);
+  CHECK_ERROR (H5Pclose(fapl_id));
 
   /* report status */
   if (nerrors == 0)
