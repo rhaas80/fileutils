@@ -303,7 +303,10 @@ int main (int argc, char *argv[])
   do_copy = !two_passes;
   for (pass = 0 ; pass < (two_passes ? 2 : 1) ; pass++)
   {
-    for (i = 0; i < argc - 2; i++)
+    // alternate order of file traversal to re-use possibly cached data
+    for (pass == 0 ? (i = 0       ) : (i = argc - 3);
+         pass == 0 ? (i < argc - 2) : (i >= 0      );
+         pass == 0 ? (i++         ) : (i--         ))
     {
       if(two_passes)
       {
