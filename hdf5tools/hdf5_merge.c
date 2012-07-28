@@ -322,6 +322,50 @@ int main (int argc, char *argv[])
       current_file = argv[i + 1];
       CHECK_ERROR (infiles[i] = H5Fopen (current_file, H5F_ACC_RDONLY, H5P_DEFAULT));
       CHECK_ERROR (H5Giterate (infiles[i], "/", NULL, CopyObject, &outfile));
+      
+      /* check that no dangling references keep the file in memory */
+      objectcount = H5Fget_obj_count(infiles[i], H5F_OBJ_ALL);
+      if (objectcount > 1)
+      {
+        hid_t *obj_id_list;
+        int obj;
+
+        fprintf (stderr, 
+                 "There were %d dangling object references to file '%s'\n"
+                 "Attempting to close them now. Please contact the author.\n",
+                 (int)objectcount, current_file);
+
+        obj_id_list = malloc(sizeof(*obj_id_list)*objectcount);
+        if (obj_id_list != NULL)
+        {
+          CHECK_ERROR (H5Fget_obj_ids(infiles[i], H5F_OBJ_ALL, objectcount,
+                                      obj_id_list));
+          for(obj = 0 ; obj < objectcount ; obj++)
+          {
+            if(obj_id_list[obj] != infiles[i])
+            {
+              H5O_info_t info;
+              const char *obj_types[H5O_TYPE_NTYPES] = {
+                "H5O_TYPE_GROUP", "H5O_TYPE_DATASET","H5O_TYPE_NAMED_DATATYPE"
+              };
+              CHECK_ERROR (H5Oget_info(obj_id_list[obj], &info));
+              if(info.type != H5O_TYPE_UNKNOWN && info.type < H5O_TYPE_NTYPES)
+                printf("Closing object of type %s\n", obj_types[info.type]);
+              else
+                printf("Closing object of unknown type %d\n", (int)info.type);
+              CHECK_ERROR (H5Oclose(obj_id_list[obj]));
+            }
+          }
+          free(obj_id_list);
+        }
+        else
+        {
+          fprintf (stderr, 
+                   "Could not free dangling objects for file '%s' due to lack "
+                   "of RAM\n", current_file);
+        }
+      }
+
       /* finally, close the open file */
       CHECK_ERROR (H5Fclose (infiles[i]));
     }
@@ -511,7 +555,7 @@ static herr_t CopyObject (hid_t from,
     struct treenode *n;
     char *p;
     int iter;
-    static hid_t tsgroup = -1;
+    static hid_t tsgroup = -1; /* this single group (in the output file) will be leaked */
     static int cached_iter = -1;
     
     p=strstr(objectname, "it=");
@@ -539,10 +583,6 @@ static herr_t CopyObject (hid_t from,
       }
       return (0);
     }
-
-    CHECK_ERROR (from = H5Dopen (from, objectname));
-    CHECK_ERROR (datatype = H5Dget_type (from));
-    CHECK_ERROR (dataspace = H5Dget_space (from));
 
     /* put each iteration in a separate group if so requested */
     if (iter != -1 && create_groups)
@@ -598,6 +638,10 @@ static herr_t CopyObject (hid_t from,
         printf ("   creating dataset '%s%s'\n", pathname, objectname);
     }
 
+    CHECK_ERROR (from = H5Dopen (from, objectname));
+    CHECK_ERROR (datatype = H5Dget_type (from));
+    CHECK_ERROR (dataspace = H5Dget_space (from));
+
     /* first pass: create datasets */
     if (do_create) 
     {
@@ -629,6 +673,7 @@ static herr_t CopyObject (hid_t from,
         free (data);
       }
     }
+
     CHECK_ERROR (H5Dclose (to));
     CHECK_ERROR (H5Dclose (from));
     CHECK_ERROR (H5Sclose (dataspace));
