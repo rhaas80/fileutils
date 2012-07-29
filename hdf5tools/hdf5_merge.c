@@ -30,6 +30,9 @@
 #include <string.h>
 #include <assert.h>
 
+#include <signal.h>
+#include <unistd.h>
+
 #define DEBUG
 
 /* the rcs ID and its dummy function to use it */
@@ -75,6 +78,8 @@ static int create_groups = 0;      /* create one group per iteration */
 static int two_passes = 0;         /* first create all groups and datasets, then fill them with data */
 static int change_nioprocs = 0;    /* set Cactus' nioprocs */
 static time_t program_startup;     /* used to determine if a dataset has been created by us */
+static int datasets_copied_total;  /* total number of datasets handled */
+static int datasets_copied_delta;  /* number of datasets handled since last report */
 
 struct treenode
 {
@@ -95,6 +100,31 @@ static struct treenode *find_iteration(int iteration, const char *objectname);
 static struct treenode *add_iteration(int iteration, const char *objectname, const char *filename);
 static int compare(const void *a, const void *b);
 static int files_from_same_set(const char *a, const char *b);
+static void report_speed(int signum);
+
+static void report_speed(int signum)
+{
+  time_t now;
+  double avg_speed;
+
+  signal(SIGALRM, report_speed);
+  alarm(10); /* repeats every 10 seconds */
+
+  now = time(NULL);
+  datasets_copied_total += datasets_copied_delta;
+  
+  if(now != program_startup)
+    avg_speed = datasets_copied_total/(double)(now-program_startup);
+  else
+    avg_speed = datasets_copied_total;
+
+  printf("\n  Current speed: %d datasets/s, average speed %g datasets/s\n",
+         datasets_copied_delta, avg_speed);
+
+  datasets_copied_delta = 0;
+
+  return;
+}
 
 static int compare(const void *a, const void *b)
 {
@@ -210,6 +240,8 @@ int main (int argc, char *argv[])
 {
   int i, pass;
   hid_t *infiles, outfile, fapl_id;
+  ssize_t objectcount;       /* number of open objects when file is closed */
+  int measure_speed = 0;     /* output speed information periogically */
 
   /* used to track which objects are created by me */
   program_startup = time(NULL);
@@ -237,6 +269,9 @@ int main (int argc, char *argv[])
         break;
       case 'u':
          change_nioprocs = 1;
+        break;
+      case 's':
+         measure_speed = 1;
         break;
       default:
         fprintf(stderr, "unknown option '%s'.", argv[i]);
@@ -303,6 +338,13 @@ int main (int argc, char *argv[])
   do_copy = !two_passes;
   for (pass = 0 ; pass < (two_passes ? 2 : 1) ; pass++)
   {
+    if (measure_speed)
+    {
+      report_speed(SIGALRM);
+      datasets_copied_total = 0;
+      datasets_copied_delta = 0;
+    }
+
     // alternate order of file traversal to re-use possibly cached data
     for (pass == 0 ? (i = 0       ) : (i = argc - 3);
          pass == 0 ? (i < argc - 2) : (i >= 0      );
@@ -392,6 +434,10 @@ int main (int argc, char *argv[])
   CHECK_ERROR (H5Pclose(fapl_id));
 
   /* report status */
+
+  if (measure_speed)
+    report_speed(SIGALRM);
+
   if (nerrors == 0)
   {
     printf ("\n\n   *** All input files successfully merged. ***\n\n");
@@ -433,6 +479,7 @@ void usage(char *argv[])
     fprintf (stderr, "Usage: %s [-g] [-t] [-v] <infile1> [<infile2> ...] <outfile>\n",argv[0]);
     fprintf (stderr, "       -g : create groups for each iteration\n");
     fprintf (stderr, "       -u : set niprocs=1 (unchunk)\n");
+    fprintf (stderr, "       -s : periodically output information on speed\n");
     fprintf (stderr, "       -t : copy datasets in two passes\n");
     fprintf (stderr, "       -v : output each dataset name as it is copied\n");
     fprintf (stderr, "       Cactus' hdf5_merge uses -v by default\n");
@@ -654,6 +701,7 @@ static herr_t CopyObject (hid_t from,
     CHECK_ERROR (from = H5Dopen (from, objectname));
     CHECK_ERROR (datatype = H5Dget_type (from));
     CHECK_ERROR (dataspace = H5Dget_space (from));
+    datasets_copied_delta += 1;
 
     /* first pass: create datasets */
     if (do_create) 
