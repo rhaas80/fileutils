@@ -324,7 +324,7 @@ int main (int argc, char *argv[])
       CHECK_ERROR (H5Giterate (infiles[i], "/", NULL, CopyObject, &outfile));
       
       /* check that no dangling references keep the file in memory */
-      objectcount = H5Fget_obj_count(infiles[i], H5F_OBJ_ALL);
+      CHECK_ERROR (objectcount = H5Fget_obj_count(infiles[i], H5F_OBJ_ALL));
       if (objectcount > 1)
       {
         hid_t *obj_id_list;
@@ -368,6 +368,19 @@ int main (int argc, char *argv[])
 
       /* finally, close the open file */
       CHECK_ERROR (H5Fclose (infiles[i]));
+
+      /* there are two known refences to the output file:
+       * - outfile
+       * - cached_tsgroup
+       */
+      CHECK_ERROR (objectcount = H5Fget_obj_count(outfile, H5F_OBJ_ALL));
+      if (objectcount > 2) 
+      {
+        fprintf (stderr, 
+                 "There are %d dangling object references to the output file '%s'.\n"
+                 "Please contact the author.\n",
+                 (int)objectcount, argv[argc-1]);
+      }
     }
 
     do_create = 0;
