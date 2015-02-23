@@ -312,7 +312,7 @@ void* worker(void *callarg)
   // waiting for a reply, so that we don't send multiple requests
   bool waiting_for_FILE = false;
   FILE* fh = NULL;
-  char fid[8]; // identifies current file
+  char fid[8] = "-1"; // identifies current file
   std::string fn; // used only for error output
   while(true) {
     packet_t* packet = NULL;
