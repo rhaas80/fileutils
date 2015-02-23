@@ -17,6 +17,7 @@
 #include <iostream>
 
 #define NUM_THREADS 4
+#define NUM_PACKETS 10
 #define CHUNK_SIZE 80000
 
 struct serialized_packet_t
@@ -32,6 +33,7 @@ struct serialized_packet_t
 #define TYPE_FILE "FILE"
 #define TYPE_WORK "WORK"
 #define TYPE_STAT "STAT"
+#define TYPE_ACK "ACK "
 
 class packet_t;
 
@@ -102,6 +104,8 @@ struct packet_t
   int size;
   char fid[8];
   std::vector<char> data;
+
+  packet_t(port_t* rp) : reply_port(rp), size(0) { memcpy(type, TYPE_ACK, sizeof(type)); };
 };
 
 // tar file format
@@ -290,85 +294,120 @@ static char make_tarheader(const std::string fn, posix_header* hdr)
   return hdr->typeflag;
 }
 
-// this is port of the controlling thread. It accepts work requests by the
-// workers as well as data pushes by the workers.
-port_t master_port;
-
 // each worker reads files as instructed by the controlling thread. It pushes
 // the data to the controller as a sequence of DATA packets. The last packet
 // has zero size and indicates EOF. A worker requests new work by sending a
 // WORK packet to the controller.
 void* worker(void *callarg)
 {
-  port_t* myport = static_cast<port_t*>(callarg);
+  port_t* master_port = static_cast<port_t*>(callarg);
 
+  port_t myport;
+  std::queue<packet_t*> packets;
+  for(int i = 0 ; i < NUM_PACKETS ; ++i) {
+    packets.push(new packet_t(&myport));
+  }
+
+  // this is set to true whenever we have sent a FILE packet to master and are
+  // waiting for a reply, so that we don't send multiple requests
+  bool waiting_for_FILE = false;
+  FILE* fh = NULL;
+  char fid[8]; // identifies current file
+  std::string fn; // used only for error output
   while(true) {
-    packet_t* packet = myport->pull_packet();
-    //std::cerr << "Got packet: "
-    //          << std::string(packet->type, sizeof(packet->type))
-    //          << " size: " << packet->size
-    //          << " payload: " << std::string(&packet->data[0], packet->data.size())
-    //          << std::endl;
+    packet_t* packet = NULL;
 
-    if(strncmp(packet->type, TYPE_FILE, sizeof(packet->type)) != 0) {
-      std::cerr << "Unexpected type "
-                << std::string(packet->type, sizeof(packet->type)) << std::endl;
-      master_port.push_packet(packet);
-      exit(1);
+    if(packets.empty() || waiting_for_FILE) {
+      packet = myport.pull_packet();
+    } else {
+      packet = packets.front();
+      packets.pop();
     }
 
-    std::string fn(&packet->data[0], packet->data.size());
+#ifdef DEBUG
+    std::cerr << "Got packet: " << (void*)packet
+              << " of type "
+              << std::string(packet->type, sizeof(packet->type))
+              << " size: " << packet->size
+              << " payload: " << (packet->size ? std::string(&packet->data[0], packet->size) : "")
+              << std::endl;
+#endif
 
-    packet->data.resize(BLOCKSIZE);
-    const char typeflag = make_tarheader(fn, reinterpret_cast<posix_header*>(&packet->data[0]));
-    memcpy(packet->type, TYPE_STAT, sizeof(packet->type));
-    packet->size = BLOCKSIZE;
-    master_port.push_packet(packet);
-    packet = myport->pull_packet();
-
-    if(typeflag == REGTYPE) {
-      FILE* fh = fopen(fn.c_str(), "rb");
-      if(fh == NULL) {
-        std::cerr << "Could not open file " << fn << ": " << strerror(errno)
-                  << std::endl;
+    // act on possible command in packet
+    if(strncmp(packet->type, TYPE_FILE, sizeof(packet->type)) == 0) {
+      if(fh != NULL) {
+        std::cerr << "Received FILE packet for " << std::string(&packet->data[0], sizeof(packet->type))
+                  << " while still processing file " << fn << std::endl;
         exit(1);
       }
 
-      packet->data.resize(CHUNK_SIZE);
-      memcpy(packet->type, TYPE_DATA, sizeof(packet->type));
+      // a new file, open it and send metadata to master to write
+      waiting_for_FILE = false;
 
-      do {
+      fn = std::string(&packet->data[0], packet->data.size());
+      memcpy(fid, packet->fid, sizeof(packet->fid));
+
+      // send metadata to master
+      packet->data.resize(BLOCKSIZE);
+      const char typeflag = make_tarheader(fn, reinterpret_cast<posix_header*>(&packet->data[0]));
+      memcpy(packet->type, TYPE_STAT, sizeof(packet->type));
+      packet->size = BLOCKSIZE;
+      master_port->push_packet(packet);
+
+      if(typeflag == REGTYPE) {
+        fh = fopen(fn.c_str(), "rb");
+        if(fh == NULL) {
+          std::cerr << "Could not open file " << fn << ": " << strerror(errno)
+                    << std::endl;
+          exit(1);
+        }
+      }
+    } else if(strncmp(packet->type, TYPE_ACK, sizeof(packet->type)) == 0) {
+      if(fh == NULL) { // (maybe) get some work
+        if(waiting_for_FILE) {
+#ifdef DEBUG
+          std::cerr << "Queuing packet: " << (void*)packet  << std::endl;
+#endif
+          packets.push(packet);
+        } else {
+#ifdef DEBUG
+          std::cerr << "Requesting WORK: " << (void*)packet << std::endl;
+#endif
+          memcpy(packet->type, TYPE_WORK, sizeof(packet->type));
+          master_port->push_packet(packet);
+          waiting_for_FILE = true;
+        }
+      } else { // we already have some work to do
+        packet->data.resize(CHUNK_SIZE);
+        memcpy(packet->type, TYPE_DATA, sizeof(packet->type));
+
         const size_t sz_read =
           fread(&packet->data[0], 1, packet->data.size(), fh);
-        if(sz_read > 0) { // this avoid writing two termination packets
-          packet->size = sz_read;
-          master_port.push_packet(packet);
-          packet = myport->pull_packet();
-          if(strncmp(packet->type, TYPE_DATA, sizeof(packet->type)) != 0) {
-            std::cerr << "Unexpected type "
-                      << std::string(packet->type, sizeof(packet->type))
-                      << std::endl;
-            exit(1);
-          }
+        if(ferror(fh)) {
+          std::cerr << "Could not read from file " << fn << ": "
+                    << strerror(errno) << std::endl;
+          exit(1);
         }
-      } while(!feof(fh) && !ferror(fh));
-      if(ferror(fh)) {
-        std::cerr << "Could not read from file " << fn << ": "
-                  << strerror(errno) << std::endl;
-        exit(1);
+#ifdef DEBUG
+        std::cerr << "Writing " << sz_read << " bytes of file " << fn << " in: "
+                  << (void*)packet << std::endl;
+#endif
+
+        packet->size = sz_read;
+        memcpy(packet->fid, fid, sizeof(packet->fid));
+        master_port->push_packet(packet);
+
+        if(sz_read == 0) { // this means eof occured
+          fclose(fh);
+          fh = NULL;
+        }
       }
-
-      fclose(fh);
-
-      // terminate file
-      packet->size = 0;
-      master_port.push_packet(packet);
-      packet = myport->pull_packet();
+    } else {
+      std::cerr << "Unexpected type "
+                << std::string(packet->type, sizeof(packet->type))
+                << std::endl;
+      exit(1);
     }
-
-    // request more work
-    memcpy(packet->type, TYPE_WORK, sizeof(packet->type));
-    master_port.push_packet(packet);
   }
 
   return NULL;
@@ -379,38 +418,28 @@ void* worker(void *callarg)
 // and writes them as a stream to stdout.
 void sender()
 {
+  // this is port of the controlling thread. It accepts work requests by the
+  // workers as well as data pushes by the workers.
+  port_t master_port;
+
   std::vector<pthread_t> threads(NUM_THREADS);
   for(size_t i = 0 ; i < threads.size() ; ++i) {
-    port_t* port = new port_t();
-    packet_t* packet = new packet_t();
-    if(port == NULL) {
-      std::cerr << "Could not allocate memory for port and packet for thread "
-                << i << std::endl;
-      exit(1);
-    }
     const int ierr =
-      pthread_create(&threads[i], NULL, worker, static_cast<void*>(port));
+      pthread_create(&threads[i], NULL, worker, static_cast<void*>(&master_port));
     if(ierr) {
       std::cerr << "Could not create thread " << i << ": " << strerror(errno)
                 << std::endl;
       exit(1);
     }
-    packet->reply_port = port;
-    memcpy(packet->type, TYPE_WORK, sizeof(packet->type));
-    packet->size = 0;
-    master_port.push_packet(packet);
   }
 
   int fid = 0;  // unique ID for each file
-  int active_threads = threads.size(); // number of threads that are processing
-                                       // a file
+  int active_threads = 0; // number of threads that are processing a file
   // loop as long as we either have files to process or not all workers are
   // done
   while(!std::cin.eof() || active_threads > 0) {
     packet_t* packet = master_port.pull_packet();
     if(strncmp(packet->type, TYPE_WORK, sizeof(packet->type)) == 0) {
-      active_threads -= 1;
-
       std::string fn;
       if(std::getline(std::cin, fn).good()) {
         fid += 1;
@@ -442,6 +471,10 @@ void sender()
       memcpy(ser_packet.fid, packet->fid, sizeof(packet->fid));
       fwrite(&ser_packet, sizeof(ser_packet), 1, stdout);
       fwrite(&packet->data[0], 1, packet->size, stdout);
+      if(packet->size == 0)
+        active_threads -= 1;
+
+      memcpy(packet->type, TYPE_ACK, sizeof(packet->type));
       packet->reply_port->push_packet(packet);
     } else {
       std::cerr << "Unexpected type "
