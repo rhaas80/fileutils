@@ -596,7 +596,7 @@ void maketar()
   size_t sz_tarfile = 0;
 
   // TODO: fix this
-  FILE* fh = fopen("test.tar", "wb");
+  FILE* fh = stdout;
 
   while(fread(&ser_packet, sizeof(ser_packet), 1, stdin)) {
     // parse packet header into variables
@@ -718,7 +718,7 @@ void maketar()
     exit(1);
   }
   fwrite(&buf[0], 1, buf.size(), fh);
-  fclose(fh);
+  //fclose(fh);
 }
 
 int main(int argc, char **argv)
