@@ -10,43 +10,45 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-int setup_transfer(char *argv[])
+void setup_transfers(int pipes[], int npipes, char *argv[])
 {
-  int pipefd[2];
-  if(pipe(pipefd) == -1) {
-    fprintf(stderr, "Could not create pipe: %s\n", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
+  for(int i = 0 ; i < npipes ; i++) {
+    int pipefd[2];
+    if(pipe(pipefd) == -1) {
+      fprintf(stderr, "Could not create pipe: %s\n", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
 
-  pid_t pid = fork();
-  if(pid == -1) {
-    perror("fork failed");
-    exit(EXIT_FAILURE);
-  } else if(pid == 0) {
-    /* child */
-    if(dup2(pipefd[0], 0) == -1) {
-      fprintf(stderr, "Could not dup pipe fd: %s\n", strerror(errno));
+    pid_t pid = fork();
+    if(pid == -1) {
+      perror("fork failed");
       exit(EXIT_FAILURE);
-    }
-    if(close(pipefd[0]) == -1 || close(pipefd[1]) == -1) {
-      fprintf(stderr, "Could not close pipe fd: %s\n", strerror(errno));
+    } else if(pid == 0) {
+      /* child */
+      if(dup2(pipefd[0], 0) == -1) {
+        fprintf(stderr, "Could not dup pipe fd: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      if(close(pipefd[0]) == -1 || close(pipefd[1]) == -1) {
+        fprintf(stderr, "Could not close pipe fd: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      execv(argv[0], argv);
+      /* only get here if something went wrong */
+      fprintf(stderr, "Could not execute %s: %s", argv[0], strerror(errno));
       exit(EXIT_FAILURE);
+    } else {
+      /* parent */
+      if(close(pipefd[0]) == -1) {
+        fprintf(stderr, "Could not close read end of pipe fd: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      if(fcntl(pipefd[1], F_SETFL, O_NONBLOCK) == -1) {
+        fprintf(stderr, "Could not make write end of pipe nonblocking: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      pipes[i] = pipefd[1];
     }
-    execv(argv[0], argv);
-    /* only get here if something went wrong */
-    fprintf(stderr, "Could not execute %s: %s", argv[0], strerror(errno));
-    exit(EXIT_FAILURE);
-  } else {
-    /* parent */
-    if(close(pipefd[0]) == -1) {
-      fprintf(stderr, "Could not close read end of pipe fd: %s\n", strerror(errno));
-      exit(EXIT_FAILURE);
-    }
-    if(fcntl(pipefd[1], F_SETFL, O_NONBLOCK) == -1) {
-      fprintf(stderr, "Could not make write end of pipe nonblocking: %s\n", strerror(errno));
-      exit(EXIT_FAILURE);
-    }
-    return pipefd[1];
   }
 }
 
@@ -60,10 +62,11 @@ int main(int argc, char *argv[])
   char *buffers[nprocs];
   ssize_t left[nprocs], size[nprocs];
 
+  setup_transfers(pipes, nprocs, &argv[2]);
+
   int maxfd = 0;
   fd_set writefds;
   for(int i = 0 ; i < nprocs ; i++) {
-    pipes[i] = setup_transfer(&argv[2]);
     if(pipes[i] > maxfd)
       maxfd = pipes[i];
 
