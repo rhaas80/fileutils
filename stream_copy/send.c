@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 void setup_transfers(int pipes[], int npipes, char *argv[])
 {
@@ -49,6 +51,42 @@ void setup_transfers(int pipes[], int npipes, char *argv[])
       }
       pipes[i] = pipefd[1];
     }
+  }
+}
+
+void setup_sockets(int socks[], int nsocks, char *sockname)
+{
+  struct sockaddr_un server;
+  int sd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if(sd == -1) {
+      fprintf(stderr, "socket: %s", strerror(errno));
+      exit(EXIT_FAILURE);
+  }
+  server.sun_family = AF_UNIX;
+  strcpy(server.sun_path, sockname);
+  unlink(server.sun_path);
+  const int len = strlen(server.sun_path) + sizeof(server.sun_family);
+  if(bind(sd, (struct sockaddr *)&server, len) == -1) {
+    fprintf(stderr, "listen: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  if(listen(sd, nsocks) == -1) {
+    fprintf(stderr, "listen: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  for(int i = 0 ; i < nsocks ; i++) {
+    socks[i] = accept(sd, NULL, NULL);
+    if(socks[i] == -1) {
+      fprintf(stderr, "accept: %s", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  if(close(sd) == -1) {
+    fprintf(stderr, "close: %s", strerror(errno));
+    exit(EXIT_FAILURE);
   }
 }
 
