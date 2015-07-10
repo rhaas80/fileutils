@@ -1,7 +1,8 @@
-all: send recv
+all: send recv connect
 
 send: send.o
 recv: recv.o
+connect: connect.o
 
 %.o: %.c Makefile
 	gcc -std=gnu99 -g -O3 -c $< -o $@
@@ -12,4 +13,4 @@ recv: recv.o
 .PONY: clean all
 
 clean:
-	rm -rf send send.o recv recv.o
+	rm -rf send send.o recv recv.o connect connect.o
