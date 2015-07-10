@@ -1,16 +1,14 @@
-all: send recv connect
+all: transfer
 
-send: send.o
-recv: recv.o
-connect: connect.o
+OBJS:=transfer.o send.o recv.o socket.o pipe.o
 
 %.o: %.c Makefile
 	gcc -std=gnu99 -g -O3 -c $< -o $@
 
-%: %.o Makefile
-	gcc -g -o $@ $<
+transfer: Makefile $(OBJS)
+	gcc -g -o $@ $(OBJS)
 
 .PONY: clean all
 
 clean:
-	rm -rf send send.o recv recv.o connect connect.o
+	rm -rf transfer $(OBJS)

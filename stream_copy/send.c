@@ -12,99 +12,24 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-void setup_transfers(int pipes[], int npipes, char *argv[])
-{
-  for(int i = 0 ; i < npipes ; i++) {
-    int pipefd[2];
-    if(pipe(pipefd) == -1) {
-      fprintf(stderr, "Could not create pipe: %s\n", strerror(errno));
-      exit(EXIT_FAILURE);
-    }
+#include "streamcopy.h"
+#include "send.h"
 
-    pid_t pid = fork();
-    if(pid == -1) {
-      perror("fork failed");
-      exit(EXIT_FAILURE);
-    } else if(pid == 0) {
-      /* child */
-      if(dup2(pipefd[0], 0) == -1) {
-        fprintf(stderr, "Could not dup pipe fd: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-      }
-      if(close(pipefd[0]) == -1 || close(pipefd[1]) == -1) {
-        fprintf(stderr, "Could not close pipe fd: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-      }
-      execv(argv[0], argv);
-      /* only get here if something went wrong */
-      fprintf(stderr, "Could not execute %s: %s", argv[0], strerror(errno));
-      exit(EXIT_FAILURE);
-    } else {
-      /* parent */
-      if(close(pipefd[0]) == -1) {
-        fprintf(stderr, "Could not close read end of pipe fd: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-      }
-      if(fcntl(pipefd[1], F_SETFL, O_NONBLOCK) == -1) {
-        fprintf(stderr, "Could not make write end of pipe nonblocking: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-      }
-      pipes[i] = pipefd[1];
-    }
-  }
-}
-
-void setup_sockets(int socks[], int nsocks, char *sockname)
+int stream_send(const char *fn, int pipes[], int npipes)
 {
-  struct sockaddr_un server;
-  int sd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if(sd == -1) {
-      fprintf(stderr, "socket: %s", strerror(errno));
-      exit(EXIT_FAILURE);
-  }
-  server.sun_family = AF_UNIX;
-  strcpy(server.sun_path, sockname);
-  unlink(server.sun_path);
-  const int len = strlen(server.sun_path) + sizeof(server.sun_family);
-  if(bind(sd, (struct sockaddr *)&server, len) == -1) {
-    fprintf(stderr, "listen: %s", strerror(errno));
+  int fd = open(fn, O_RDONLY, 0);
+  if(fd == -1) {
+    fprintf(stderr, "Could not open file %s for reading: %s\n", fn,
+            strerror(errno));
     exit(EXIT_FAILURE);
   }
-
-  if(listen(sd, nsocks) == -1) {
-    fprintf(stderr, "listen: %s", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-
-  for(int i = 0 ; i < nsocks ; i++) {
-    socks[i] = accept(sd, NULL, NULL);
-    if(socks[i] == -1) {
-      fprintf(stderr, "accept: %s", strerror(errno));
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  if(close(sd) == -1) {
-    fprintf(stderr, "close: %s", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-}
-
-#define BUFFERSIZE (BUFSIZ + 2*sizeof(ssize_t))
-int main(int argc, char *argv[])
-{
-  assert(argc >= 3 && "Usage: send NPROCS [tunnel] [opts] recv");
-  const int nprocs = atoi(argv[1]);
-
-  int pipes[nprocs];
-  char *buffers[nprocs];
-  ssize_t left[nprocs], size[nprocs];
-
-  setup_transfers(pipes, nprocs, &argv[2]);
+    
+  char *buffers[npipes];
+  ssize_t left[npipes], size[npipes];
 
   int maxfd = 0;
   fd_set writefds;
-  for(int i = 0 ; i < nprocs ; i++) {
+  for(int i = 0 ; i < npipes ; i++) {
     if(pipes[i] > maxfd)
       maxfd = pipes[i];
 
@@ -118,7 +43,7 @@ int main(int argc, char *argv[])
   ssize_t offset = 0;
   for(int all_written = 0, all_read = 0 ; !all_read || !all_written ; ) {
     FD_ZERO(&writefds);
-    for(int i = 0 ; i < nprocs ; i++) {
+    for(int i = 0 ; i < npipes ; i++) {
       /* at least one has left[i] != 0 due to the check at the end of the
        * foo_loop */
       if(!(all_read && left[i] == 0)) {
@@ -130,11 +55,11 @@ int main(int argc, char *argv[])
       fprintf(stderr, "Could not wait for writing end of pipe: %s\n", strerror(errno));
       exit(EXIT_FAILURE);
     }
-    for(int i = 0 ; i < nprocs ; i++) {
+    for(int i = 0 ; i < npipes ; i++) {
       if(FD_ISSET(pipes[i], &writefds)) {
         do {
           if(left[i] == 0) {
-            left[i] = read(0, buffers[i]+2*sizeof(ssize_t), BUFFERSIZE-2*sizeof(ssize_t));
+            left[i] = read(fd, buffers[i]+2*sizeof(ssize_t), BUFFERSIZE-2*sizeof(ssize_t));
             if(left[i] == -1) {
               fprintf(stderr, "Could not read from stdin: %s\n", strerror(errno));
               exit(EXIT_FAILURE);
@@ -170,7 +95,7 @@ int main(int argc, char *argv[])
     /* when all is read, wait until all is written before ending */
     if(all_read) {
       all_written = 1;
-      for(int i = 0 ; i < nprocs ; i++) {
+      for(int i = 0 ; i < npipes ; i++) {
         if(left[i] > 0) {
           all_written = 0;
           break;
@@ -180,15 +105,14 @@ int main(int argc, char *argv[])
   }
 
   /* flush any leftover caches and close pipes */
-  for(int i = 0 ; i < nprocs ; i++) {
+  for(int i = 0 ; i < npipes ; i++) {
     if(close(pipes[i]) == -1) {
       fprintf(stderr, "Could not close pipe fd: %s\n", strerror(errno));
       exit(EXIT_FAILURE);
     }
   }
 
-  /* wait for all children */
-  while(wait(NULL) > 0) {};
+  close(fd);
 
   return 0;
 }
