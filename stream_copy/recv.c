@@ -108,8 +108,8 @@ void setup_recvs(const char *dst, const char *host, const char *sockname,
 
       char *argv[] = {
         getenv("SHELL"), "-c", "${0} ${1+\"$@\"}",
-        "ssh", strdup(host), getcmd(), "-connect", strdup(sockname),
-        NULL
+        "ssh", "-o", "ControlPath=none", strdup(host), getcmd(), "-connect",
+        strdup(sockname), NULL
       };
       execv(argv[0], argv);
       /* only get here if something went wrong */

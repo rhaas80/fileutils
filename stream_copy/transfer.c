@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
 
       char *args[] = {
         getenv("SHELL"), "-c", "${0} ${1+\"$@\"}",
-        "ssh", host, getcmd(), "-recv", dst,
+        "ssh", "-o", "ControlPath=none", host, getcmd(), "-recv", dst,
         NULL
       };
       setup_pipes(tunnels, nprocs, args);
