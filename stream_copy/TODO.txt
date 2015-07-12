@@ -1,0 +1,22 @@
+* change recv into a single routine using select
+* design then:
+
+
+      ssh-connect-
+     /             \
+send -ssh-connect---recv
+ |   \             / |
+ |    ssh-connect-   |
+ \                   |
+  --------ssh--------/
+or 
+     ssh-connect-
+    /             \
+recv-ssh-connect---send
+ |  \             /  |
+ |   ssh-coonect-    |
+ \                   |
+  --------ssh--------/
+
+* where each of send/recv takes an array of fds that can be either pipes or
+  socks or stdin/stdout (in case I want to save the control channel ssh)
