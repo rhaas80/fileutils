@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "streamcopy.h"
 #include "send.h"
 #include "socket.h"
 #include "recv.h"
@@ -56,7 +57,7 @@ int main(int argc, char *argv[])
 
       char *args[] = {
         getenv("SHELL"), "-c", "${0} ${1+\"$@\"}",
-        "ssh", host, "transfer", "-recv", dst,
+        "ssh", host, getcmd(), "-recv", dst,
         NULL
       };
       setup_pipes(tunnels, nprocs, args);
@@ -72,7 +73,7 @@ int main(int argc, char *argv[])
 
       char *s_args[] = {
         getenv("SHELL"), "-c", "${0} ${1+\"$@\"}",
-        "ssh", host, "transfer", "-send", nprocs_s, src, sockname,
+        "ssh", host, getcmd(), "-send", nprocs_s, src, sockname,
         NULL
       };
       int server;
