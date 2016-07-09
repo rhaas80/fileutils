@@ -1,0 +1,15 @@
+A simple threaded file copy and tar utility designed for situations where file
+system latency is dominating file copy speeds.
+
+Usage:
+
+find . -iname qestions*.txt | parcp --create | parcp --tar >42.tar
+
+or 
+
+find . -iname qestions*.txt | parcp --create | ssh remote 'parcp --tar >42.tar'
+
+to transfer the tarfile to a remote host.
+
+NOTE that even though parcp writes to stdout, redirection must be to a file
+since parcp must be able to call fseek on stdout.

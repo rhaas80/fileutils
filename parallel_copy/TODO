@@ -1,0 +1,6 @@
+* support creating a tarfile without having to use a pipe
+* support a tarfile name on the command line
+* support specifying archive members on the command line
+* add runtime options for number of threads etc.
+
+* simplify code by removing the ability to do just a stream copy (?)
