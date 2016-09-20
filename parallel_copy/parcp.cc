@@ -4,6 +4,10 @@
 #include <grp.h>
 #include <pwd.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 #include <cstdio>
 #include <queue>
@@ -629,7 +633,8 @@ void maketar()
   size_t sz_tarfile = 0;
 
   // TODO: fix this
-  FILE* fh = stdout;
+  int fd = open("foo.tar", O_RDWR | O_CREAT | O_TRUNC, (mode_t)0666);
+  char *mapping = NULL;
 
   while(fread(&ser_packet, sizeof(ser_packet), 1, stdin)) {
     // parse packet header into variables
@@ -667,36 +672,42 @@ void maketar()
       const posix_header* hdr = reinterpret_cast<posix_header*>(&buf[0]);
       assert(buf.size() == BLOCKSIZE);
       if(hdr->typeflag == SYMTYPE) {
-        const int ierr_fseek = fseek(fh, sz_tarfile, SEEK_SET);
-        if(ierr_fseek) {
-          std::cerr << "failed to seek to position " << sz_tarfile << ": "
+        char *old_mapping = mapping;
+        size_t new_sz_tarfile = sz_tarfile+buf.size();
+        if(ftruncate(fd, new_sz_tarfile) == -1) {
+          std::cerr << "failed to resize file to " << new_sz_tarfile << " : "
                     << strerror(errno) << std::endl;
           exit(1);
         }
-        const size_t written = fwrite(&buf[0], 1, buf.size(), fh);
-        if(written != buf.size()) {
-          std::cerr << "failed to write to " << filenames[fid]
+        mapping = (char*)mmap(NULL, new_sz_tarfile, PROT_WRITE, MAP_SHARED, fd, 0);
+        if(mapping == MAP_FAILED) {
+          std::cerr << "failed to create mapping : "
                     << strerror(errno) << std::endl;
           exit(1);
         }
-        sz_tarfile += buf.size();
+        if(old_mapping)
+          munmap(old_mapping, sz_tarfile);
+        memcpy(mapping + sz_tarfile, &buf[0], buf.size());
+        sz_tarfile = new_sz_tarfile;
       } else if(hdr->typeflag == REGTYPE) {
-        const int ierr_fseek = fseek(fh, sz_tarfile, SEEK_SET);
-        if(ierr_fseek) {
-          std::cerr << "failed to seek to position " << sz_tarfile << ": "
+        char *old_mapping = mapping;
+        size_t new_sz_tarfile = sz_tarfile+buf.size()+round_to_block(strtol(hdr->size, NULL, 8));
+        if(ftruncate(fd, new_sz_tarfile) == -1) {
+          std::cerr << "failed to resize file to " << new_sz_tarfile << " : "
                     << strerror(errno) << std::endl;
           exit(1);
         }
-        const size_t written = fwrite(&buf[0], 1, buf.size(), fh);
-        if(written != buf.size()) {
-          std::cerr << "failed to write to " << filenames[fid] << ": "
+        mapping = (char*)mmap(NULL, new_sz_tarfile, PROT_WRITE, MAP_SHARED, fd, 0);
+        if(mapping == MAP_FAILED) {
+          std::cerr << "failed to create mapping : "
                     << strerror(errno) << std::endl;
           exit(1);
         }
-        sz_tarfile += buf.size();
-
-        fileoffsets[fid] = sz_tarfile;
-        sz_tarfile += round_to_block(strtol(hdr->size, NULL, 8));
+        if(old_mapping)
+          munmap(old_mapping, sz_tarfile);
+        memcpy(mapping + sz_tarfile, &buf[0], buf.size());
+        sz_tarfile = new_sz_tarfile;
+        fileoffsets[fid] = buf.size();
       } else {
         std::cerr << "unknown type flag '" << hdr->typeflag << "'"
                   << std::endl;
@@ -710,20 +721,9 @@ void maketar()
         exit(1);
       }
       size_t offset = fileoffsets[fid];
-      const int ierr_fseek = fseek(fh, offset, SEEK_SET);
-      if(ierr_fseek) {
-        std::cerr << "failed to seek to position " << sz_tarfile << ": "
-                  << strerror(errno) << std::endl;
-        exit(1);
-      }
-      const size_t written = fwrite(&buf[0], 1, buf.size(), fh);
-      if(written != buf.size()) {
-        std::cerr << "failed to write to " << filenames[fid]
-                  << strerror(errno) << std::endl;
-        exit(1);
-      }
-      fileoffsets[fid] += written;
-      if(written == 0) { // EOF marker
+      memcpy(mapping+offset, &buf[0], buf.size());
+      fileoffsets[fid] += buf.size();
+      if(buf.size() == 0) { // EOF marker
         // we may write less than a multiple of BLOCKSIZE bytes and rely on the
         // OS to present the holes in the output file as null bytes
         fileoffsets.erase(fid);
@@ -741,17 +741,21 @@ void maketar()
   }
 
   // write tar termination blocks
+  if(mapping) {
+    munmap(mapping, sz_tarfile);
+    mapping = NULL;
+  }
   buf.resize(2*BLOCKSIZE);
   memset(&buf[0], 0, buf.size());
   // TODO: add error checks
-  const int ierr_fseek = fseek(fh, sz_tarfile, SEEK_SET);
-  if(ierr_fseek) {
-    std::cerr << "failed to seek to position " << sz_tarfile
+  const int ierr_fseek = lseek(fd, sz_tarfile, SEEK_SET);
+  if(ierr_fseek == (off_t)-1) {
+    std::cerr << "failed to seek to position " << sz_tarfile << " : "
               << strerror(errno) << std::endl;
     exit(1);
   }
-  fwrite(&buf[0], 1, buf.size(), fh);
-  //fclose(fh);
+  write(fd, &buf[0], buf.size());
+  close(fd);
 }
 
 int main(int argc, char **argv)
