@@ -13,6 +13,8 @@
 
 #define NUM_PACKETS 10
 #define NUM_THREADS 4
+#define TARGET_NUM_FILES 100
+#define TARGET_NUM_BYTES (10*1024*1024)
 
 #define ENVCOMMAND "/usr/bin/env"
 #define TAROPTS {(char*)ENVCOMMAND, (char*)"tar", (char*)"x", NULL}
@@ -267,6 +269,7 @@ int main(int argc, char **argv)
     char pad[12];                 /* 500 */
   } hdr;
   off_t cur = 0, entrystart = 0;
+  size_t num_entries = 0;
   while(true) {
     ssize_t haveread = pread(0, (void*)&hdr, sizeof(hdr), cur);
     if(haveread == -1) {
@@ -285,13 +288,16 @@ int main(int argc, char **argv)
     snprintf(szbuf, sizeof(szbuf), "%.12s", hdr.size);
     long int size = ROUNDUP(strtol(szbuf, NULL, 8));
 
-    if(hdr.typeflag == '0' || hdr.typeflag == 0) {
+    if((hdr.typeflag == '0' || hdr.typeflag == 0) &&
+      // wait until we have collected enough data to make this worthwhile
+      (num_entries >= TARGET_NUM_FILES ||
+       cur + sizeof(hdr) + size - entrystart >= TARGET_NUM_BYTES)) {
       struct tarentry_t tarentry = {
         entrystart, (size_t)((cur - entrystart) + sizeof(hdr) + size)
       };
 #     ifdef DEBUG
       fprintf(stderr, "Master waiting for work request\n");
-#     endif
+#         endif
       struct workrequest_t workrequest = master_port.pull_packet();
 #     ifdef DEBUG
       fprintf(stderr, "Pushing request for '%s' at %zd length %ld\n",
@@ -299,8 +305,10 @@ int main(int argc, char **argv)
 #     endif
       workrequest.requestor->push_packet(tarentry);
       entrystart = cur = cur + sizeof(hdr) + size;
+      num_entries = 0;
     } else {
       cur = cur + sizeof(hdr) + size;
+      num_entries += 1;
     }
   }
   // take care of dangling entries at end of file
